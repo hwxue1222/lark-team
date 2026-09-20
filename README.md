@@ -88,6 +88,10 @@ python scripts/start.py
 
 健康检查：`http://127.0.0.1:8000/health`
 
+### 2.1) 换电脑（迁移到新机器）
+
+迁移步骤见：[`docs/MOVE_TO_NEW_MACHINE.md`](docs/MOVE_TO_NEW_MACHINE.md)
+
 ### 3) Local Agent（控制本机执行简单动作）
 
 Local Agent 是跑在你自己电脑上的本地服务，用于执行“打开网页”等本机动作。
