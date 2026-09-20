@@ -226,6 +226,57 @@ class BBYAccountingClient:
             status=(str(entry.get("status")) if entry.get("status") is not None else None),
         )
 
+    def get_latest_voucher_no(self) -> str | None:
+        self.ensure_logged_in()
+
+        candidates = [
+            "/api/journals",
+            "/api/journals/list",
+            "/api/journals/vouchers",
+            "/api/vouchers",
+        ]
+        last_error: Exception | None = None
+        for path in candidates:
+            try:
+                data = self._get_json(path)
+            except Exception as e:
+                last_error = e
+                continue
+
+            data_obj = data.get("data")
+            voucher_no = _extract_first_voucher_no(data_obj)
+            if voucher_no:
+                return voucher_no
+        if last_error:
+            return None
+        return None
+
+
+def _extract_first_voucher_no(obj: Any) -> str | None:
+    if obj is None:
+        return None
+    if isinstance(obj, str):
+        return None
+    if isinstance(obj, (int, float, bool)):
+        return None
+    if isinstance(obj, dict):
+        for k in ("voucherNo", "voucher_no"):
+            v = obj.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        for v in obj.values():
+            hit = _extract_first_voucher_no(v)
+            if hit:
+                return hit
+        return None
+    if isinstance(obj, list):
+        for it in obj:
+            hit = _extract_first_voucher_no(it)
+            if hit:
+                return hit
+        return None
+    return None
+
     def resolve_account_id(self, *, account_code: str) -> str:
         ref = (account_code or "").strip()
         if not ref:

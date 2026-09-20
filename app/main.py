@@ -56,6 +56,7 @@ class PendingJournal:
         stage: str,
         resolved_account_ids: dict[int, str] | None = None,
         resolved_account_labels: dict[int, str] | None = None,
+        latest_voucher_no: str | None = None,
     ) -> None:
         self.cmd = cmd
         self.sender_id_type = sender_id_type
@@ -65,6 +66,28 @@ class PendingJournal:
         self.stage = stage
         self.resolved_account_ids = resolved_account_ids or {}
         self.resolved_account_labels = resolved_account_labels or {}
+        self.latest_voucher_no = latest_voucher_no
+
+
+def _format_journal_status(status: str | None) -> str:
+    raw = (status or "").strip()
+    if not raw:
+        return "-"
+
+    s = raw.lower().replace("_", " ").replace("-", " ")
+    s = " ".join([p for p in s.split() if p])
+
+    if "posted" in s:
+        return "已过账"
+    if s in {"post", "post ok", "posted ok"}:
+        return "已过账"
+    if "draft" in s:
+        return "草稿"
+    if "void" in s:
+        return "已作废"
+    if "cancel" in s:
+        return "已取消"
+    return raw
 
 
 def _extract_operator_receive_id(event: Any) -> tuple[str, str] | None:
@@ -300,6 +323,20 @@ def build_event_handler(
                             bot.send_card_to_union_id(union_id=sender_id_value, card=card)
 
                     if resolved_org_id:
+                        latest_voucher_no: str | None = None
+                        try:
+                            client = BBYAccountingClient(
+                                base_url=accountant.base_url,
+                                email=accountant.email,
+                                password=accountant.password,
+                                org_id=resolved_org_id,
+                            )
+                            try:
+                                latest_voucher_no = client.get_latest_voucher_no()
+                            finally:
+                                client.close()
+                        except Exception:
+                            latest_voucher_no = None
                         pending_journals.set(
                             action_id,
                             PendingJournal(
@@ -311,9 +348,17 @@ def build_event_handler(
                                 stage="confirm",
                                 resolved_account_ids={},
                                 resolved_account_labels={},
+                                latest_voucher_no=latest_voucher_no,
                             ),
                         )
-                        _send_card(build_journal_confirm_card(action_id=action_id, cmd=cmd, account_label_overrides=None))
+                        _send_card(
+                            build_journal_confirm_card(
+                                action_id=action_id,
+                                cmd=cmd,
+                                account_label_overrides=None,
+                                system_latest_voucher_no=latest_voucher_no,
+                            )
+                        )
                         return
 
                     try:
@@ -354,6 +399,20 @@ def build_event_handler(
                                 elif sender_id_type == "union_id":
                                     bot.send_text_to_union_id(union_id=sender_id_value, text=reply)
                             return
+                        latest_voucher_no: str | None = None
+                        try:
+                            client2 = BBYAccountingClient(
+                                base_url=accountant.base_url,
+                                email=accountant.email,
+                                password=accountant.password,
+                                org_id=chosen,
+                            )
+                            try:
+                                latest_voucher_no = client2.get_latest_voucher_no()
+                            finally:
+                                client2.close()
+                        except Exception:
+                            latest_voucher_no = None
                         pending_journals.set(
                             action_id,
                             PendingJournal(
@@ -365,9 +424,17 @@ def build_event_handler(
                                 stage="confirm",
                                 resolved_account_ids={},
                                 resolved_account_labels={},
+                                latest_voucher_no=latest_voucher_no,
                             ),
                         )
-                        _send_card(build_journal_confirm_card(action_id=action_id, cmd=cmd, account_label_overrides=None))
+                        _send_card(
+                            build_journal_confirm_card(
+                                action_id=action_id,
+                                cmd=cmd,
+                                account_label_overrides=None,
+                                system_latest_voucher_no=latest_voucher_no,
+                            )
+                        )
                         return
 
                     pending_journals.set(
@@ -556,12 +623,32 @@ def build_event_handler(
                 stage="confirm",
                 resolved_account_ids=pending.resolved_account_ids,
                 resolved_account_labels=pending.resolved_account_labels,
+                latest_voucher_no=None,
             )
+
+            latest_voucher_no: str | None = None
+            if accountant and accountant.enabled and accountant.email and accountant.password:
+                try:
+                    client = BBYAccountingClient(
+                        base_url=accountant.base_url,
+                        email=accountant.email,
+                        password=accountant.password,
+                        org_id=org_id,
+                    )
+                    try:
+                        latest_voucher_no = client.get_latest_voucher_no()
+                    finally:
+                        client.close()
+                except Exception:
+                    latest_voucher_no = None
+
+            updated.latest_voucher_no = latest_voucher_no
             pending_journals.set(action_id, updated)
             card = build_journal_confirm_card(
                 action_id=action_id,
                 cmd=pending.cmd,
                 account_label_overrides=updated.resolved_account_labels,
+                system_latest_voucher_no=latest_voucher_no,
             )
             if pending.chat_id:
                 bot.send_card_to_chat_id(chat_id=pending.chat_id, card=card)
@@ -596,6 +683,7 @@ def build_event_handler(
                 action_id=action_id,
                 cmd=pending.cmd,
                 account_label_overrides=pending.resolved_account_labels,
+                system_latest_voucher_no=pending.latest_voucher_no,
             )
             if pending.chat_id:
                 bot.send_card_to_chat_id(chat_id=pending.chat_id, card=card)
@@ -670,7 +758,9 @@ def build_event_handler(
                     )
                 finally:
                     client.close()
-                text = f"分录已创建：entry_id={res.entry_id} status={res.status or '-'} voucher_no={res.voucher_no or '-'}"
+                status_label = _format_journal_status(res.status)
+                voucher_no = res.voucher_no or "-"
+                text = f"分录已创建：分录号={voucher_no} 状态={status_label} entry_id={res.entry_id}"
                 _send_text_back(pending=pending, text=text)
             except Exception as e:
                 _send_text_back(pending=pending, text=f"分录创建失败：{e}")
