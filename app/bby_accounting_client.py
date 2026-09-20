@@ -52,8 +52,11 @@ class BBYAccountingClient:
     def close(self) -> None:
         self._client.close()
 
-    def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        r = self._client.post(path, json=payload, headers={"accept": "application/json"})
+    def _post_json(self, path: str, payload: dict[str, Any], *, headers: dict[str, str] | None = None) -> dict[str, Any]:
+        merged_headers = {"accept": "application/json"}
+        if headers:
+            merged_headers.update(headers)
+        r = self._client.post(path, json=payload, headers=merged_headers)
         data = self._must_json(r)
         if not data.get("success"):
             raise RuntimeError(f"bbyaccounting error: http={r.status_code} error={data.get('error')}")
@@ -215,7 +218,7 @@ class BBYAccountingClient:
             "memo": memo,
             "lines": lines,
         }
-        data = self._post_json("/api/journals/post", payload)
+        data = self._post_json("/api/journals/post", payload, headers={"X-Posted-Source": "bot"})
         data_obj = data.get("data")
         entry = (data_obj.get("entry") if isinstance(data_obj, dict) else None) or {}
         if not isinstance(entry, dict):
@@ -225,57 +228,6 @@ class BBYAccountingClient:
             voucher_no=(str(entry.get("voucherNo")) if entry.get("voucherNo") is not None else None),
             status=(str(entry.get("status")) if entry.get("status") is not None else None),
         )
-
-    def get_latest_voucher_no(self) -> str | None:
-        self.ensure_logged_in()
-
-        candidates = [
-            "/api/journals",
-            "/api/journals/list",
-            "/api/journals/vouchers",
-            "/api/vouchers",
-        ]
-        last_error: Exception | None = None
-        for path in candidates:
-            try:
-                data = self._get_json(path)
-            except Exception as e:
-                last_error = e
-                continue
-
-            data_obj = data.get("data")
-            voucher_no = _extract_first_voucher_no(data_obj)
-            if voucher_no:
-                return voucher_no
-        if last_error:
-            return None
-        return None
-
-
-def _extract_first_voucher_no(obj: Any) -> str | None:
-    if obj is None:
-        return None
-    if isinstance(obj, str):
-        return None
-    if isinstance(obj, (int, float, bool)):
-        return None
-    if isinstance(obj, dict):
-        for k in ("voucherNo", "voucher_no"):
-            v = obj.get(k)
-            if isinstance(v, str) and v.strip():
-                return v.strip()
-        for v in obj.values():
-            hit = _extract_first_voucher_no(v)
-            if hit:
-                return hit
-        return None
-    if isinstance(obj, list):
-        for it in obj:
-            hit = _extract_first_voucher_no(it)
-            if hit:
-                return hit
-        return None
-    return None
 
     def resolve_account_id(self, *, account_code: str) -> str:
         ref = (account_code or "").strip()
